@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+
+# Local runtime/cache artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated review outputs can be kept locally unless intentionally published.
+outputs/runs/
+outputs/research-review/
