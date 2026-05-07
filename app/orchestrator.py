@@ -22,10 +22,32 @@ from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent if APP_DIR.name == "app" else APP_DIR
+PROJECTS_DIR = ROOT / "projects"
+
+
+def active_project_dir() -> Path:
+    project_dir = os.environ.get("MUTI_AGENT_PROJECT_DIR")
+    if project_dir:
+        return Path(project_dir).expanduser().resolve()
+
+    project_name = os.environ.get("MUTI_AGENT_PROJECT", "tju-fyp-reviewer")
+    named_project = PROJECTS_DIR / project_name
+    if named_project.exists():
+        return named_project
+
+    if PROJECTS_DIR.exists():
+        projects = sorted(path for path in PROJECTS_DIR.iterdir() if path.is_dir())
+        if len(projects) == 1:
+            return projects[0]
+
+    return ROOT
+
+
+ACTIVE_PROJECT_DIR = active_project_dir()
 AGENTS_DIR = ROOT / "agents"
 SKILLS_DIR = ROOT / "skills"
-OUTPUTS_DIR = ROOT / "outputs" / "runs"
-RESEARCH_REVIEW_DIR = ROOT / "outputs" / "research-review"
+OUTPUTS_DIR = ACTIVE_PROJECT_DIR / "outputs" / "runs"
+RESEARCH_REVIEW_DIR = ACTIVE_PROJECT_DIR / "outputs" / "research-review"
 CONTEXT_INCLUDE_SUFFIXES = {
     ".tex",
     ".bib",
@@ -191,6 +213,13 @@ def read_text(path: Path) -> str:
 
 def optional_text(path: Path) -> str:
     return read_text(path) if path.exists() else ""
+
+
+def project_text(filename: str) -> str:
+    project_path = ACTIVE_PROJECT_DIR / filename
+    if project_path.exists():
+        return read_text(project_path)
+    return optional_text(ROOT / filename)
 
 
 def list_agents() -> list[str]:
@@ -497,8 +526,8 @@ def detect_agent_from_message(message: str, fallback: str = "planner") -> str:
 
 def build_prompt(agent: str, task: str, context_paths: list[str], skills: list[str]) -> str:
     global_rules = optional_text(ROOT / "AGENTS.md")
-    project = optional_text(ROOT / "PROJECT.md")
-    memory = optional_text(ROOT / "MEMORY.md")
+    project = project_text("PROJECT.md")
+    memory = project_text("MEMORY.md")
     role = load_agent(agent)
     extra_context = load_context_files(context_paths)
     loaded_skills = [load_skill(name) for name in skills]
@@ -530,8 +559,8 @@ def build_prompt(agent: str, task: str, context_paths: list[str], skills: list[s
 def base_instruction_blocks(agent: str, skills: list[str]) -> list[tuple[str, str]]:
     blocks = [
         ("GLOBAL PROJECT INSTRUCTIONS", optional_text(ROOT / "AGENTS.md")),
-        ("PROJECT FACTS", optional_text(ROOT / "PROJECT.md")),
-        ("PROJECT MEMORY", optional_text(ROOT / "MEMORY.md")),
+        ("PROJECT FACTS", project_text("PROJECT.md")),
+        ("PROJECT MEMORY", project_text("MEMORY.md")),
         (f"AGENT ROLE: {agent}", load_agent(agent)),
     ]
     for name in skills:
@@ -842,6 +871,7 @@ def write_run(agent: str, task: str, provider: str, skills: list[str], prompt: s
         "skills": skills,
         "provider": provider,
         "task": task,
+        "project_dir": str(ACTIVE_PROJECT_DIR),
         "created_at": dt.datetime.now(dt.UTC).isoformat(),
     }
     (run_dir / "trace.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -917,6 +947,7 @@ def run_quality_review(
         "skills": skills,
         "provider": "quality-review",
         "task": task,
+        "project_dir": str(ACTIVE_PROJECT_DIR),
         "created_at": dt.datetime.now(dt.UTC).isoformat(),
         "context_roots": index.get("roots", []),
         "indexed_files": index.get("count", 0),

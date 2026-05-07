@@ -13,5 +13,11 @@ env/
 .ruff_cache/
 
 # Generated review outputs can be kept locally unless intentionally published.
-outputs/runs/
-outputs/research-review/
+outputs/runs/**
+outputs/research-review/**
+projects/*/outputs/runs/**
+projects/*/outputs/research-review/**
+!outputs/runs/.gitkeep
+!outputs/research-review/.gitkeep
+!projects/*/outputs/runs/.gitkeep
+!projects/*/outputs/research-review/.gitkeep

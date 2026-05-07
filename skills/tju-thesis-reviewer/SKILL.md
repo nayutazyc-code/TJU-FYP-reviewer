@@ -9,8 +9,8 @@ Use this skill when the user is working on a Tianjin University undergraduate th
 
 ## First step
 
-- Read `PROJECT.md` if it exists.
-- Read `MEMORY.md` if it exists.
+- Read the active project's `PROJECT.md` if it exists.
+- Read the active project's `MEMORY.md` if it exists.
 - Infer the thesis entry files, abstract files, bibliography files, and appendix files before editing.
 
 ## Priorities

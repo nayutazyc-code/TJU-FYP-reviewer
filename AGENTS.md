@@ -15,5 +15,5 @@
 - Prioritize submission-blocking format, citation, numbering, and compile issues before prose polishing.
 - Keep thesis edits minimal and do not change conclusions, data scope, or chapter structure unless the user asks.
 - Report findings by severity, then list changed or recommended files, pending risks, and compile status.
-- Write all future paper/research review reports under `outputs/research-review/` unless the user gives a different output path.
+- Write all future paper/research review reports under `projects/<project-name>/outputs/research-review/` unless the user gives a different output path.
 - Use descriptive filenames that identify the reviewed paper, such as `<arxiv-id>-review.md` or `<paper-slug>-review.md`.
