@@ -6,6 +6,19 @@ __pycache__/
 .venv/
 venv/
 env/
+.env
+.env.*
+!.env.example
+
+# Local/private working memory
+/memory.md
+/MEMORY.md
+
+# Project-specific private profiles and review state.
+projects/*/PROJECT.md
+projects/*/MEMORY.md
+projects/*/claims.md
+projects/*/experiments.md
 
 # Local runtime/cache artifacts
 .pytest_cache/
