@@ -48,6 +48,7 @@ AGENTS_DIR = ROOT / "agents"
 SKILLS_DIR = ROOT / "skills"
 OUTPUTS_DIR = ACTIVE_PROJECT_DIR / "outputs" / "runs"
 RESEARCH_REVIEW_DIR = ACTIVE_PROJECT_DIR / "outputs" / "research-review"
+PROJECT_PROFILE_FILES = ("PROJECT.md", "MEMORY.md", "claims.md", "experiments.md")
 CONTEXT_INCLUDE_SUFFIXES = {
     ".tex",
     ".bib",
@@ -358,6 +359,15 @@ def summarize_context_paths(paths: list[str]) -> dict[str, object]:
     return {"count": len(files), "total_bytes": total_bytes, "files": files}
 
 
+def default_project_context() -> list[str]:
+    roots: list[str] = []
+    for name in ("paper", "results"):
+        path = ACTIVE_PROJECT_DIR / name
+        if path.exists() and iter_context_dir(path):
+            roots.append(str(path))
+    return roots or [str(ACTIVE_PROJECT_DIR)]
+
+
 def context_roots(paths: list[str]) -> list[Path]:
     roots: list[Path] = []
     seen: set[Path] = set()
@@ -511,12 +521,44 @@ def render_context_blocks(paths: list[Path], byte_limit: int) -> str:
     return "\n\n---\n\n".join(blocks) if blocks else "No context file excerpts were selected."
 
 
+def build_project_bootstrap_prompt(context_paths: list[str]) -> str:
+    context_summary = summarize_context_paths(context_paths)
+    excerpts = render_context_blocks(resolve_context_paths(context_paths), 24_000)
+    existing = render_blocks(
+        [(f"EXISTING {filename}", optional_text(ACTIVE_PROJECT_DIR / filename)) for filename in PROJECT_PROFILE_FILES]
+    )
+    schema = {filename: f"complete replacement Markdown for {filename}" for filename in PROJECT_PROFILE_FILES}
+    blocks = [
+        ("GLOBAL PROJECT INSTRUCTIONS", optional_text(ROOT / "AGENTS.md")),
+        ("TASK", "Infer and update the active research project profile from the supplied files."),
+        ("ACTIVE PROJECT DIRECTORY", str(ACTIVE_PROJECT_DIR)),
+        ("CONTEXT SUMMARY", json.dumps(context_summary, ensure_ascii=False, indent=2)),
+        ("EXISTING PROJECT PROFILE FILES", existing),
+        ("SOURCE FILE EXCERPTS", excerpts),
+        (
+            "BOOTSTRAP RULES",
+            "Return ONLY a JSON object whose keys are exactly PROJECT.md, MEMORY.md, claims.md, and experiments.md. "
+            "Each value must be complete Markdown file content. Preserve useful existing sections. Fill only what is supported by source files. "
+            "Mark uncertain information as blank, TODO, or 人工确认. Do not invent paper titles, results, claims, commands, data sources, or advisor preferences. "
+            "Keep conclusions conservative and evidence-grounded.",
+        ),
+        ("REQUIRED JSON SHAPE", json.dumps(schema, ensure_ascii=False, indent=2)),
+    ]
+    return render_blocks(blocks)
+
+
 def make_run_dir(agent: str, task: str) -> Path:
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", task.strip())[:40].strip("-") or "task"
-    run_dir = OUTPUTS_DIR / f"{timestamp}-{agent}-{slug}"
-    run_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir
+    base = OUTPUTS_DIR / f"{timestamp}-{agent}-{slug}"
+    for index in range(100):
+        run_dir = base if index == 0 else OUTPUTS_DIR / f"{timestamp}-{agent}-{slug}-{index + 1}"
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            continue
+        return run_dir
+    raise OrchestratorError(f"Could not create a unique run directory for {base}")
 
 
 def detect_agent_from_message(message: str, fallback: str = "planner") -> str:
@@ -601,6 +643,13 @@ def build_quality_triage_prompt(agent: str, task: str, skills: list[str], index:
 def extract_json_object(text: str) -> dict[str, object] | None:
     fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
     candidates = [fenced.group(1)] if fenced else []
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidates.append(stripped[start : end + 1])
     candidates.extend(re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL))
     for candidate in candidates:
         try:
@@ -993,6 +1042,80 @@ def run_quality_review(
     }
 
 
+def bootstrap_project(
+    context: list[str] | None = None,
+    provider: str = "codex-cli",
+    dry_run: bool = False,
+) -> dict[str, object]:
+    context_paths = context or default_project_context()
+    prompt = build_project_bootstrap_prompt(context_paths)
+    context_summary = summarize_context_paths(context_paths)
+    run_dir = make_run_dir("planner", "bootstrap-project-profile")
+    (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+
+    if dry_run or provider == "echo":
+        (run_dir / "output.md").write_text(prompt, encoding="utf-8")
+        return {
+            "agent": "planner",
+            "skills": [],
+            "provider": "bootstrap",
+            "task": "bootstrap project profile",
+            "context_summary": context_summary,
+            "output": (
+                "Bootstrap dry run complete.\n\n"
+                f"Active project: {ACTIVE_PROJECT_DIR}\n"
+                f"Context files: {context_summary.get('count', 0)}\n"
+                f"Prompt saved: {run_dir / 'prompt.md'}"
+            ),
+            "run_dir": str(run_dir),
+            "updated_files": [],
+        }
+
+    output = run_provider(provider, prompt)
+    (run_dir / "output.md").write_text(output, encoding="utf-8")
+    data = extract_json_object(output)
+    if data is None:
+        raise OrchestratorError("Bootstrap output did not contain a JSON object.")
+
+    updated_files: list[str] = []
+    for filename in PROJECT_PROFILE_FILES:
+        content = data.get(filename)
+        if not isinstance(content, str) or not content.strip():
+            raise OrchestratorError(f"Bootstrap output missing non-empty string for {filename}.")
+        path = ACTIVE_PROJECT_DIR / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        updated_files.append(str(path))
+
+    meta = {
+        "agent": "planner",
+        "provider": f"bootstrap:{provider}",
+        "task": "bootstrap project profile",
+        "project_dir": str(ACTIVE_PROJECT_DIR),
+        "created_at": dt.datetime.now(dt.UTC).isoformat(),
+        "context": context_summary,
+        "updated_files": updated_files,
+    }
+    (run_dir / "trace.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "agent": "planner",
+        "skills": [],
+        "provider": "bootstrap",
+        "task": "bootstrap project profile",
+        "context_summary": context_summary,
+        "output": (
+            "Project bootstrap complete.\n\n"
+            f"Active project: {ACTIVE_PROJECT_DIR}\n"
+            f"Context files: {context_summary.get('count', 0)}\n"
+            "Updated files:\n"
+            + "\n".join(f"- {path}" for path in updated_files)
+            + f"\n\nRun saved: {run_dir}"
+        ),
+        "run_dir": str(run_dir),
+        "updated_files": updated_files,
+    }
+
+
 def run_task(
     task: str,
     agent: str | None = None,
@@ -1003,6 +1126,8 @@ def run_task(
     deepseek_api_key: str | None = None,
     use_gemini: bool = True,
 ) -> dict[str, object]:
+    if provider == "bootstrap":
+        return bootstrap_project(context=context, provider="codex-cli")
     selected_agent = agent or detect_agent_from_message(task)
     selected_skills = infer_skills(task, skill or [], auto_skill)
     if provider == "quality-review":
@@ -1056,6 +1181,16 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    result = bootstrap_project(
+        context=args.context or None,
+        provider=args.provider,
+        dry_run=args.dry_run,
+    )
+    print(result["output"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local multi-agent orchestrator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1077,10 +1212,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask.add_argument("--context", "-c", action="append", default=[])
     p_ask.add_argument("--skill", "-s", action="append", default=[])
     p_ask.add_argument("--no-auto-skill", action="store_true")
-    p_ask.add_argument("--provider", choices=["echo", "codex-cli", "quality-review"], default="echo")
+    p_ask.add_argument("--provider", choices=["echo", "codex-cli", "quality-review", "bootstrap"], default="echo")
     p_ask.add_argument("--deepseek-api-key")
     p_ask.add_argument("--no-gemini", action="store_true")
     p_ask.set_defaults(func=cmd_ask)
+
+    p_bootstrap = sub.add_parser("bootstrap", help="Infer and write active project profile files")
+    p_bootstrap.add_argument("--context", "-c", action="append", default=[], help="Source file or folder to inspect")
+    p_bootstrap.add_argument("--provider", choices=["codex-cli", "echo"], default="codex-cli")
+    p_bootstrap.add_argument("--dry-run", action="store_true", help="Write only the bootstrap prompt, not project files")
+    p_bootstrap.set_defaults(func=cmd_bootstrap)
 
     return parser
 

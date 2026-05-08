@@ -185,6 +185,7 @@ HTML = r"""<!doctype html>
       </select>
       <label for="provider">Provider</label>
       <select id="provider">
+        <option value="bootstrap">Bootstrap Project</option>
         <option value="quality-review">Quality Review</option>
         <option value="echo">Echo</option>
         <option value="codex-cli">Codex CLI</option>
@@ -247,7 +248,8 @@ HTML = r"""<!doctype html>
 
     el("form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const task = el("task").value.trim();
+      const isBootstrap = el("provider").value === "bootstrap";
+      const task = el("task").value.trim() || (isBootstrap ? "自动填写项目档案" : "");
       if (!task) return;
       const context = el("context").value.split(",").map(s => s.trim()).filter(Boolean);
       const skillValue = el("skill").value;
@@ -255,7 +257,7 @@ HTML = r"""<!doctype html>
       el("task").value = "";
       el("send").disabled = true;
       const providerLabel = el("provider").selectedOptions[0]?.textContent || el("provider").value;
-      el("status").textContent = providerLabel === "Quality Review" ? "Indexing and reviewing..." : "Running...";
+      el("status").textContent = providerLabel === "Quality Review" ? "Indexing and reviewing..." : (providerLabel === "Bootstrap Project" ? "Bootstrapping project..." : "Running...");
       try {
         const res = await fetch("/api/ask", {
           method: "POST",

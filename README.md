@@ -34,3 +34,19 @@ python3 app/web_app.py
 ```bash
 python3 app/orchestrator.py --help
 ```
+
+## 自动填写项目档案
+
+把论文或结果文件放入 `projects/tju-fyp-reviewer/paper/`、`projects/tju-fyp-reviewer/results/` 后，可以让 agent 先生成项目档案：
+
+```bash
+python3 app/orchestrator.py bootstrap
+```
+
+也可以指定额外上下文：
+
+```bash
+python3 app/orchestrator.py bootstrap -c projects/tju-fyp-reviewer/paper -c projects/tju-fyp-reviewer/results
+```
+
+该命令会更新活动项目下的 `PROJECT.md`、`MEMORY.md`、`claims.md` 和 `experiments.md`。后续 `render`、`ask`、`quality-review` 会自动读取活动项目的 `PROJECT.md` 和 `MEMORY.md`。
