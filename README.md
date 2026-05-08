@@ -19,6 +19,8 @@
 - `projects/tju-fyp-reviewer/results/`：项目原始结果。
 - `projects/tju-fyp-reviewer/paper/`：论文正文或稿件材料。
 - `projects/tju-fyp-reviewer/outputs/`：当前项目的 agent 运行产物和 review 报告。
+- `projects/tju-fyp-reviewer/outputs/research-review/clean/`：给人阅读的干净审查报告。
+- `projects/tju-fyp-reviewer/outputs/research-review/raw/`：原始模型输出、日志混杂报告和排查材料。
 - `outputs/run-manifests/`：跨项目运行清单或索引。
 
 默认项目是 `projects/tju-fyp-reviewer/`。如需切换项目，可设置环境变量 `MUTI_AGENT_PROJECT=<project-name>` 或 `MUTI_AGENT_PROJECT_DIR=<absolute-path>`。

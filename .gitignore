@@ -15,9 +15,20 @@ env/
 # Generated review outputs can be kept locally unless intentionally published.
 outputs/runs/**
 outputs/research-review/**
+projects/*/paper/**
+projects/*/results/**
+projects/*/outputs/**
 projects/*/outputs/runs/**
 projects/*/outputs/research-review/**
 !outputs/runs/.gitkeep
 !outputs/research-review/.gitkeep
+!projects/*/paper/
+!projects/*/paper/.gitkeep
+!projects/*/results/
+!projects/*/results/.gitkeep
+!projects/*/outputs/
+!projects/*/outputs/.gitkeep
+!projects/*/outputs/runs/
 !projects/*/outputs/runs/.gitkeep
+!projects/*/outputs/research-review/
 !projects/*/outputs/research-review/.gitkeep

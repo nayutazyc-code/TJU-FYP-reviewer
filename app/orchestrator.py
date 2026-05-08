@@ -48,6 +48,8 @@ AGENTS_DIR = ROOT / "agents"
 SKILLS_DIR = ROOT / "skills"
 OUTPUTS_DIR = ACTIVE_PROJECT_DIR / "outputs" / "runs"
 RESEARCH_REVIEW_DIR = ACTIVE_PROJECT_DIR / "outputs" / "research-review"
+RESEARCH_REVIEW_RAW_DIR = RESEARCH_REVIEW_DIR / "raw"
+RESEARCH_REVIEW_CLEAN_DIR = RESEARCH_REVIEW_DIR / "clean"
 PROJECT_PROFILE_FILES = ("PROJECT.md", "MEMORY.md", "claims.md", "experiments.md")
 CONTEXT_INCLUDE_SUFFIXES = {
     ".tex",
@@ -640,25 +642,40 @@ def build_quality_triage_prompt(agent: str, task: str, skills: list[str], index:
     return render_blocks(blocks)
 
 
-def extract_json_object(text: str) -> dict[str, object] | None:
-    fenced = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
-    candidates = [fenced.group(1)] if fenced else []
-    stripped = text.strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        candidates.append(stripped)
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidates.append(stripped[start : end + 1])
-    candidates.extend(re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL))
-    for candidate in candidates:
+def iter_json_objects(text: str) -> list[dict[str, object]]:
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, object]] = []
+    for match in re.finditer(r"\{", text):
         try:
-            data = json.loads(candidate)
+            data, _ = decoder.raw_decode(text, match.start())
         except json.JSONDecodeError:
             continue
         if isinstance(data, dict):
-            return data
-    return None
+            objects.append(data)
+    return objects
+
+
+def extract_json_object(
+    text: str,
+    required_keys: set[str] | None = None,
+    prefer_last: bool = False,
+) -> dict[str, object] | None:
+    required = required_keys or set()
+    matches = [data for data in iter_json_objects(text) if required.issubset(data.keys())]
+    if not matches:
+        return None
+    return matches[-1] if prefer_last else matches[0]
+
+
+def clean_codex_cli_output(output: str) -> str:
+    text = output.strip()
+    parts = re.split(r"\ncodex\n", text)
+    if len(parts) > 1:
+        text = parts[-1].strip()
+    token_match = re.search(r"\ntokens used\n[\d,]+\s*(?:\n|$)", text)
+    if token_match:
+        text = text[: token_match.start()].strip()
+    return text or output.strip()
 
 
 def select_deep_review_files(triage_output: str, index: dict[str, object]) -> list[Path]:
@@ -674,7 +691,7 @@ def select_deep_review_files(triage_output: str, index: dict[str, object]) -> li
         by_rel[str(entry.get("relative_path", ""))] = path
 
     selected: list[Path] = []
-    payload = extract_json_object(triage_output) or {}
+    payload = extract_json_object(triage_output, {"selected_files"}, prefer_last=True) or {}
     selected_items = payload.get("selected_files", [])
     if not isinstance(selected_items, list):
         selected_items = []
@@ -927,13 +944,18 @@ def write_run(agent: str, task: str, provider: str, skills: list[str], prompt: s
     return run_dir
 
 
-def write_quality_report(task: str, final_report: str) -> Path:
-    RESEARCH_REVIEW_DIR.mkdir(parents=True, exist_ok=True)
+def write_quality_report(task: str, final_report: str, raw_report: str | None = None) -> tuple[Path, Path | None]:
+    RESEARCH_REVIEW_CLEAN_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", task.strip())[:48].strip("-") or "quality-review"
-    path = RESEARCH_REVIEW_DIR / f"{timestamp}-{slug}.md"
-    path.write_text(final_report, encoding="utf-8")
-    return path
+    clean_path = RESEARCH_REVIEW_CLEAN_DIR / f"{timestamp}-{slug}.md"
+    clean_path.write_text(final_report, encoding="utf-8")
+    raw_path = None
+    if raw_report is not None:
+        RESEARCH_REVIEW_RAW_DIR.mkdir(parents=True, exist_ok=True)
+        raw_path = RESEARCH_REVIEW_RAW_DIR / f"{timestamp}-{slug}.raw.md"
+        raw_path.write_text(raw_report, encoding="utf-8")
+    return clean_path, raw_path
 
 
 def run_quality_review(
@@ -952,7 +974,9 @@ def run_quality_review(
 
     triage_prompt = build_quality_triage_prompt(agent, task, skills, index)
     (run_dir / "02-triage-prompt.md").write_text(triage_prompt, encoding="utf-8")
-    triage_output = run_provider("codex-cli", triage_prompt)
+    triage_raw_output = run_provider("codex-cli", triage_prompt)
+    (run_dir / "02-triage-output-raw.md").write_text(triage_raw_output, encoding="utf-8")
+    triage_output = clean_codex_cli_output(triage_raw_output)
     (run_dir / "02-triage-output.md").write_text(triage_output, encoding="utf-8")
 
     selected_files = select_deep_review_files(triage_output, index)
@@ -968,10 +992,12 @@ def run_quality_review(
         format_future = executor.submit(run_provider, "codex-cli", format_prompt)
         readability_future = executor.submit(run_gemini, readability_prompt, use_gemini)
         grammar_output = grammar_future.result()
-        format_output = format_future.result()
+        format_raw_output = format_future.result()
+        format_output = clean_codex_cli_output(format_raw_output)
         readability_output = readability_future.result()
 
     (run_dir / "03a-deepseek-grammar-output.md").write_text(grammar_output, encoding="utf-8")
+    (run_dir / "03b-codex-format-output-raw.md").write_text(format_raw_output, encoding="utf-8")
     (run_dir / "03b-codex-format-output.md").write_text(format_output, encoding="utf-8")
     (run_dir / "03c-gemini-readability-output.md").write_text(readability_output, encoding="utf-8")
 
@@ -987,9 +1013,11 @@ def run_quality_review(
         selected_files,
     )
     (run_dir / "04-synthesis-prompt.md").write_text(synthesis_prompt, encoding="utf-8")
-    final_report = run_provider("codex-cli", synthesis_prompt)
+    raw_final_report = run_provider("codex-cli", synthesis_prompt)
+    (run_dir / "final-report-raw.md").write_text(raw_final_report, encoding="utf-8")
+    final_report = clean_codex_cli_output(raw_final_report)
     (run_dir / "final-report.md").write_text(final_report, encoding="utf-8")
-    report_path = write_quality_report(task, final_report)
+    report_path, raw_report_path = write_quality_report(task, final_report, raw_final_report)
 
     meta = {
         "agent": agent,
@@ -1003,6 +1031,8 @@ def run_quality_review(
         "indexed_bytes": index.get("total_bytes", 0),
         "selected_files": [str(path) for path in selected_files],
         "report_path": str(report_path),
+        "raw_research_review_path": str(raw_report_path) if raw_report_path else None,
+        "raw_report_path": str(run_dir / "final-report-raw.md"),
         "parallel_review": {
             "grammar_provider": "deepseek",
             "format_provider": "codex-cli",
@@ -1071,9 +1101,13 @@ def bootstrap_project(
             "updated_files": [],
         }
 
-    output = run_provider(provider, prompt)
+    raw_output = run_provider(provider, prompt)
+    (run_dir / "output-raw.md").write_text(raw_output, encoding="utf-8")
+    output = clean_codex_cli_output(raw_output)
     (run_dir / "output.md").write_text(output, encoding="utf-8")
-    data = extract_json_object(output)
+    data = extract_json_object(output, set(PROJECT_PROFILE_FILES), prefer_last=True)
+    if data is None:
+        data = extract_json_object(raw_output, set(PROJECT_PROFILE_FILES), prefer_last=True)
     if data is None:
         raise OrchestratorError("Bootstrap output did not contain a JSON object.")
 
@@ -1095,6 +1129,7 @@ def bootstrap_project(
         "created_at": dt.datetime.now(dt.UTC).isoformat(),
         "context": context_summary,
         "updated_files": updated_files,
+        "raw_output_path": str(run_dir / "output-raw.md"),
     }
     (run_dir / "trace.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
